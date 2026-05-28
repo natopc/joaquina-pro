@@ -37,6 +37,7 @@ export interface CourierMetric {
   earnings: number;
   initials: string;
   rawDeliveries: RawDelivery[];
+  workedDays?: number;
 }
 
 export interface ChannelStats {
@@ -84,6 +85,8 @@ export interface GlobalDashboardData {
   monthlyStats: MonthlyStats[];
   last30DaysCouriers: Last30DaysCourier[];
   rawVendas: any[];
+  rawEntregas: any[];
+  rawMilanesasFaturamento?: any[];
 }
 
 export const parseDate = (dateStr: string) => {
@@ -167,7 +170,7 @@ export function processCSVData(csvContent: string): MonthlyStats[] {
         acceptedAt: `${parts[1]} ${parts[2]}`, // Mocking acceptance as same as creation if not available
         finishedAt: `${parts[1]} ${parts[2]}`, // Mocking finish
         totalTime: '00:00:00',
-        courier: parts[14] || 'Não informado',
+        courier: (parts[14] || 'Não informado').toUpperCase(),
         price: valorFinal,
         dynamicPrice: 0,
         totalPrice: valorFinal,
@@ -186,7 +189,7 @@ export function processCSVData(csvContent: string): MonthlyStats[] {
       acceptedAt: parts[7],
       finishedAt: parts[8],
       totalTime: parts[9],
-      courier: parts[10],
+      courier: (parts[10] || '').toUpperCase(),
       price: parseFloat(parts[11]) || 0,
       dynamicPrice: parseFloat(parts[12]) || 0,
       totalPrice: parseFloat(parts[13]) || 0,
@@ -422,7 +425,7 @@ export async function fetchMonthlyStatsFromDB(): Promise<GlobalDashboardData> {
     aceito_entregador: e['Aceito pelo entregador'] || e.aceito_pelo_entregador || e.aceito_entregador,
     finalizado: e['Finalização'] || e.finalizacao || e.finalização || e.finalizado,
     tempo_total: e['Tempo total da entrega'] || e.tempo_total_da_entrega || e.tempo_total,
-    entregador: e.Entregador || e.entregador,
+    entregador: (e.Entregador || e.entregador || '').toUpperCase(),
     valor_precificado: e['Valor precificado'] || e.valor_precificado,
     valor_dinamica: e['Valor dinâmica'] || e.valor_dinamica || e.valor_dinâmica,
     valor_total: e['Valor total'] || e.valor_total
@@ -854,7 +857,9 @@ export async function fetchMonthlyStatsFromDB(): Promise<GlobalDashboardData> {
   return {
     monthlyStats,
     last30DaysCouriers,
-    rawVendas: vendas
+    rawVendas: vendas,
+    rawEntregas: entregas,
+    rawMilanesasFaturamento: faturamentoMilanesa
   };
 }
 

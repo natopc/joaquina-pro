@@ -5,11 +5,13 @@ import { Modal } from '../components/Modal';
 
 interface CustomersProps {
   rawVendas: any[];
+  rawEntregas: any[];
 }
 
 interface PedidoDetalhe {
   data: Date;
   valor: number;
+  horaStr: string;
 }
 
 interface CustomerData {
@@ -26,15 +28,22 @@ interface CustomerData {
 
 const ORIGINS_LIST = ['IFOOD', 'JOTA JÁ', 'TELEFONE'];
 
-export function Customers({ rawVendas }: CustomersProps) {
+export function Customers({ rawVendas, rawEntregas }: CustomersProps) {
+  const getLocalDateString = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
   // Padrão: Últimos 30 dias
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 30);
-    return d.toISOString().split('T')[0];
+    return getLocalDateString(d);
   });
   const [endDate, setEndDate] = useState(() => {
-    return new Date().toISOString().split('T')[0];
+    return getLocalDateString(new Date());
   });
   const [limit, setLimit] = useState(15);
   
@@ -42,21 +51,50 @@ export function Customers({ rawVendas }: CustomersProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerData | null>(null);
 
+  const [sort, setSort] = useState<{ key: 'nome' | 'endereco' | 'origem' | 'ultima' | 'dias' | 'valor' | 'pedidos' | 'ticket', dir: 'asc' | 'desc' }>({
+    key: 'pedidos',
+    dir: 'desc'
+  });
+
+  const toggleSort = (key: 'nome' | 'endereco' | 'origem' | 'ultima' | 'dias' | 'valor' | 'pedidos' | 'ticket') => {
+    setSort(prev => ({
+      key,
+      dir: prev.key === key ? (prev.dir === 'asc' ? 'desc' : 'asc') : 'desc'
+    }));
+  };
+
   const topCustomers = useMemo(() => {
     if (!rawVendas || rawVendas.length === 0) return [];
 
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
+    const [startYear, startMonth, startDay] = startDate.split('-').map(Number);
+    const start = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0);
+
+    const [endYear, endMonth, endDay] = endDate.split('-').map(Number);
+    const end = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999);
 
     const customersMap = new Map<string, CustomerData>();
+
+    const entregasMap = new Map<string, string>();
+    if (rawEntregas && rawEntregas.length > 0) {
+      rawEntregas.forEach(e => {
+        const eCliente = (e.cliente || e.cliente_novo || '').trim().toUpperCase();
+        const timeStrRaw = e.hora_pedido || e['Criação'] || e.criacao || e.criação || '';
+        const [datePart] = timeStrRaw.split(' ');
+        if (eCliente && datePart && timeStrRaw.length >= 8) {
+          const key = `${eCliente}|${datePart}`;
+          if (!entregasMap.has(key)) {
+            const justTime = timeStrRaw.slice(-8).substring(0, 5);
+            entregasMap.set(key, justTime);
+          }
+        }
+      });
+    }
 
     rawVendas.forEach(v => {
       const date = parseDate(v.Data || v.data);
       if (!date || date < start || date > end) return;
 
-      const rawNome = (v.Cliente || v.cliente || '').trim();
+      const rawNome = (v.Cliente || v.cliente || '').trim().toUpperCase();
       const statusNome = (v.StatusNome || v.status_nome || '').trim().toLowerCase();
       
       // Ignorar cancelados
@@ -120,9 +158,19 @@ export function Customers({ rawVendas }: CustomersProps) {
         c.ultimaCompra = date;
       }
       
+      let horaStr = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const vDataStr = v.Data || v.data || '';
+      const [vDatePart] = vDataStr.split(' ');
+      const entregaKey = `${rawNome}|${vDatePart}`;
+      
+      if (entregasMap.has(entregaKey)) {
+        horaStr = entregasMap.get(entregaKey)!;
+      }
+      
       c.pedidosDetalhes.push({
         data: date,
-        valor: valorPedido
+        valor: valorPedido,
+        horaStr
       });
     });
 
@@ -145,7 +193,37 @@ export function Customers({ rawVendas }: CustomersProps) {
       results = results.filter(c => c.nome.toLowerCase().includes(q));
     }
 
-    results.sort((a, b) => b.pedidos - a.pedidos);
+    results.sort((a, b) => {
+      const dir = sort.dir === 'asc' ? 1 : -1;
+      
+      if (sort.key === 'nome') {
+        return a.nome.localeCompare(b.nome) * dir;
+      }
+      if (sort.key === 'endereco') {
+        return a.endereco.localeCompare(b.endereco) * dir;
+      }
+      if (sort.key === 'origem') {
+        return a.origemPrincipal.localeCompare(b.origemPrincipal) * dir;
+      }
+      if (sort.key === 'ultima') {
+        return (a.ultimaCompra.getTime() - b.ultimaCompra.getTime()) * dir;
+      }
+      if (sort.key === 'dias') {
+        return (b.ultimaCompra.getTime() - a.ultimaCompra.getTime()) * dir;
+      }
+      if (sort.key === 'valor') {
+        return (a.valorGasto - b.valorGasto) * dir;
+      }
+      if (sort.key === 'pedidos') {
+        return (a.pedidos - b.pedidos) * dir;
+      }
+      if (sort.key === 'ticket') {
+        const ticketA = a.pedidos > 0 ? a.valorGasto / a.pedidos : 0;
+        const ticketB = b.pedidos > 0 ? b.valorGasto / b.pedidos : 0;
+        return (ticketA - ticketB) * dir;
+      }
+      return 0;
+    });
 
     // Sort order details by date descending
     results.forEach(c => {
@@ -153,7 +231,7 @@ export function Customers({ rawVendas }: CustomersProps) {
     });
 
     return results.slice(0, limit);
-  }, [rawVendas, startDate, endDate, limit, selectedOrigins, searchQuery]);
+  }, [rawVendas, startDate, endDate, limit, selectedOrigins, searchQuery, sort]);
 
   const handleOriginToggle = (origin: string) => {
     setSelectedOrigins(prev => 
@@ -248,15 +326,33 @@ export function Customers({ rawVendas }: CustomersProps) {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50/50">
-                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Pos</th>
-                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Cliente</th>
-                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Endereço</th>
-                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Origem Principal</th>
-                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Última Compra</th>
-                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Dias</th>
-                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-right">Valor Gasto</th>
-                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-right">Pedidos</th>
-                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-right">Ticket Médio</th>
+                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest cursor-pointer hover:text-primary transition-colors" onClick={() => toggleSort('pedidos')}>
+                  Pos {sort.key === 'pedidos' && (sort.dir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest cursor-pointer hover:text-primary transition-colors" onClick={() => toggleSort('nome')}>
+                  Cliente {sort.key === 'nome' && (sort.dir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest cursor-pointer hover:text-primary transition-colors" onClick={() => toggleSort('endereco')}>
+                  Endereço {sort.key === 'endereco' && (sort.dir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-center cursor-pointer hover:text-primary transition-colors" onClick={() => toggleSort('origem')}>
+                  Origem Principal {sort.key === 'origem' && (sort.dir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-center cursor-pointer hover:text-primary transition-colors" onClick={() => toggleSort('ultima')}>
+                  Última Compra {sort.key === 'ultima' && (sort.dir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-center cursor-pointer hover:text-primary transition-colors" onClick={() => toggleSort('dias')}>
+                  Dias {sort.key === 'dias' && (sort.dir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-right cursor-pointer hover:text-primary transition-colors" onClick={() => toggleSort('valor')}>
+                  Valor Gasto {sort.key === 'valor' && (sort.dir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-right cursor-pointer hover:text-primary transition-colors" onClick={() => toggleSort('pedidos')}>
+                  Pedidos {sort.key === 'pedidos' && (sort.dir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-right cursor-pointer hover:text-primary transition-colors" onClick={() => toggleSort('ticket')}>
+                  Ticket Médio {sort.key === 'ticket' && (sort.dir === 'asc' ? '↑' : '↓')}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -380,7 +476,11 @@ export function Customers({ rawVendas }: CustomersProps) {
                 {selectedCustomer.pedidosDetalhes.map((pedido, idx) => (
                   <div key={idx} className="p-3 bg-white border border-slate-100 rounded-xl hover:border-slate-200 transition-colors flex items-center justify-between">
                     <div>
-                      <span className="text-xs font-bold text-slate-500">{pedido.data.toLocaleDateString('pt-BR', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</span>
+                      <span className="text-xs font-bold text-slate-500">
+                        {pedido.data.toLocaleDateString('pt-BR', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+                        {' - '}
+                        {pedido.horaStr}
+                      </span>
                     </div>
                     <div className="text-right">
                       <p className="font-black text-primary text-sm">R$ {pedido.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
